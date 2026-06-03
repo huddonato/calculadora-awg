@@ -1,141 +1,226 @@
-import re
-from kivy.app import App
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.scrollview import ScrollView
-from kivy.uix.label import Label
-from kivy.uix.textinput import TextInput
-from kivy.uix.spinner import Spinner
-from kivy.uix.button import Button
-from kivy.core.window import Window
-
-# Tabela AWG exata (Bitola: Área em mm²)
-TABELA_AWG = {
-    10: 5.26, 11: 4.17, 12: 3.31, 13: 2.62, 14: 2.08,
-    15: 1.65, 16: 1.31, 17: 1.04, 18: 0.823, 19: 0.653,
-    20: 0.519, 21: 0.411, 22: 0.326, 23: 0.259, 24: 0.205,
-    25: 0.162, 26: 0.129, 27: 0.102, 28: 0.080, 29: 0.064,
-    30: 0.051
-}
-
-class SubstitutorApp(App):
-    def build(self):
-        self.title = "Substitutor & Dimensionador Pro"
-        
-        # Layout principal com rolagem para caber em qualquer celular
-        root = ScrollView()
-        layout = BoxLayout(orientation='vertical', padding=20, spacing=15, size_hint_y=None)
-        layout.bind(minimum_height=layout.setter('height'))
-        
-        # 1. Fios Originais
-        layout.add_widget(Label(text="[b]1. Fios Originais do Motor[/b]\nExemplo: 15x20 ou 4x18 + 2x20", markup=True, size_hint_y=None, height=40))
-        self.entry_orig = TextInput(hint_text="Digite aqui...", multiline=False, size_hint_y=None, height=45)
-        layout.add_widget(self.entry_orig)
-        
-        # 2. Configurações de Material e Ligação
-        layout.add_widget(Label(text="[b]2. De / Para (Materiais):[/b]", markup=True, size_hint_y=None, height=30))
-        box_mat = BoxLayout(orientation='horizontal', spacing=10, size_hint_y=None, height=45)
-        self.spin_de = Spinner(text="Alumínio", values=("Cobre", "Alumínio"))
-        self.spin_para = Spinner(text="Cobre", values=("Cobre", "Alumínio"))
-        box_mat.add_widget(self.spin_de)
-        box_mat.add_widget(self.spin_para)
-        layout.add_widget(box_mat)
-        
-        layout.add_widget(Label(text="[b]Tipo de Ligação Elétrica:[/b]", markup=True, size_hint_y=None, height=30))
-        self.spin_ligacao = Spinner(
-            text="Série (Circuito Único)", 
-            values=("Série (Circuito Único)", "Paralelo (2 Circuitos)", "Paralelo (4 Circuitos)"),
-            size_hint_y=None, height=45
-        )
-        layout.add_widget(self.spin_ligacao)
-        
-        # 3. Fios Novos
-        layout.add_widget(Label(text="[b]3. Fios Novos de Substituição[/b]\nExemplo: 15x22 ou 10x21", markup=True, size_hint_y=None, height=40))
-        self.entry_sub = TextInput(hint_text="Digite aqui...", multiline=False, size_hint_y=None, height=45)
-        layout.add_widget(self.entry_sub)
-        
-        # Botão Calcular
-        btn = Button(text="CALCULAR REBOBINAGEM", background_color=(0.15, 0.7, 0.4, 1), font_size=16, bold=True, size_hint_y=None, height=55)
-        btn.bind(on_press=self.calcular)
-        layout.add_widget(btn)
-        
-        # Painel de Resultados
-        layout.add_widget(Label(text="[b][color=3399ff]RESULTADOS TÉCNICOS[/color][/b]", markup=True, size_hint_y=None, height=30))
-        self.lbl_resultado = Label(
-            text="Preencha os campos acima para simular.", 
-            halign="left", valign="top", markup=True, size_hint_y=None, height=180
-        )
-        self.lbl_resultado.bind(size=self.lbl_resultado.setter('text_size'))
-        layout.add_widget(self.lbl_resultado)
-        
-        root.add_widget(layout)
-        return root
-
-    def interpretar_fios(self, texto):
-        texto = texto.lower().replace(" ", "").replace(",", ".")
-        partes = texto.split("+")
-        area_total = 0.0
-        total_fios = 0
-        
-        for parte in partes:
-            if not parte: continue
-            if "x" in parte: padrao = parte.split("x")
-            elif "*" in parte: padrao = parte.split("*")
-            else: padrao = ["1", parte]
-                
-            try:
-                qtd = int(padrao[0])
-                awg = int(padrao[1])
-                if awg in TABELA_AWG:
-                    area_total += (TABELA_AWG[awg] * qtd)
-                    total_fios += qtd
-                else: return 0, 0, True
-            except: return 0, 0, True
-                
-        return area_total, total_fios, False
-
-    def calcular(self, instance):
-        area_orig, qtd_orig, erro_orig = self.interpretar_fios(self.entry_orig.text)
-        area_sub, qtd_sub, erro_sub = self.interpretar_fios(self.entry_sub.text)
-        
-        if erro_orig or area_orig == 0 or erro_sub or area_sub == 0:
-            self.lbl_resultado.text = "[color=ff3333][b]Erro:[/b] Verifique o formato dos fios digitados.[/color]"
-            return
-            
-        fator = 1.0
-        if self.spin_de.text == "Cobre" and self.spin_para.text == "Alumínio": fator = 1.6
-        elif self.spin_de.text == "Alumínio" and self.spin_para.text == "Cobre": fator = 1.0 / 1.6
-        area_necessaria_total = area_orig * fator
-        
-        tipo_ligacao = self.spin_ligacao.text
-        if tipo_ligacao == "Paralelo (2 Circuitos)": area_necessaria_total /= 2
-        elif tipo_ligacao == "Paralelo (4 Circuitos)": area_necessaria_total /= 4
-            
-        diferenca = ((area_sub - area_necessaria_total) / area_necessaria_total) * 100
-        
-        densidade = 5.0 if self.spin_para.text == "Cobre" else 3.1
-        area_real_motor = area_sub
-        if tipo_ligacao == "Paralelo (2 Circuitos)": area_real_motor *= 2
-        elif tipo_ligacao == "Paralelo (4 Circuitos)": area_real_motor *= 4
-        
-        corrente_estimada = area_real_motor * densidade
-        
-        if corrente_estimada <= 15.5: cabo = "1.5 mm²"
-        elif corrente_estimada <= 21: cabo = "2.5 mm²"
-        elif corrente_estimada <= 28: cabo = "4.0 mm²"
-        elif corrente_estimada <= 36: cabo = "6.0 mm²"
-        elif corrente_estimada <= 50: cabo = "10.0 mm²"
-        else: cabo = "16.0 mm² ou maior"
-            
-        cor_erro = "33cc33" if -5.0 <= diferenca <= 5.0 else ("ff9900" if diferenca > 5.0 else "ff3333")
-        
-        self.lbl_resultado.text = (
-            f"• Seção Original: {area_orig:.3f} mm² ({qtd_orig} fios)\n"
-            f"• Seção p/ Grupo Requerida: {area_necessaria_total:.3f} mm²\n"
-            f"• Seção Nova Proposta: {area_sub:.3f} mm² ({qtd_sub} fios)\n"
-            f"• Erro de Escala: [color={cor_erro}][b]{diferenca:+.2f}%[/b][/color]\n"
-            f"• Corrente Máx: {corrente_estimada:.1f} A\n"
-            f"• Cabo Externo Comercial: [color=3399ff][b]{cabo}[/b][/color]"
-        )
-
-if __name__ == '__main__':
-    SubstitutorApp().run()
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Substitutor & Dimensionador Pro</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --card-bg: #1e1e1e;
+            --text-color: #ffffff;
+            --text-secondary: #aaaaaa;
+            --primary: #3399ff;
+            --success: #33cc33;
+            --warning: #ff9900;
+            --danger: #ff3333;
+            --button-bg: #26b366;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+        }
+        .container {
+            width: 100%;
+            max-width: 500px;
+            background-color: var(--card-bg);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            box-sizing: border-box;
+        }
+        h1 {
+            font-size: 1.4rem;
+            text-align: center;
+            color: var(--primary);
+            margin-top: 0;
+            margin-bottom: 20px;
+        }
+        .section-title {
+            font-weight: bold;
+            margin-top: 15px;
+            margin-bottom: 5px;
+            font-size: 1rem;
+        }
+        .subtitle {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            display: block;
+        }
+        input, select {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 15px;
+            border-radius: 6px;
+            border: 1px solid #444;
+            background-color: #2a2a2a;
+            color: #fff;
+            font-size: 1rem;
+            box-sizing: border-box;
+        }
+        .row {
+            display: flex;
+            gap: 10px;
+        }
+        .row select {
+            flex: 1;
+        }
+        button {
+            width: 100%;
+            padding: 15px;
+            background-color: var(--button-bg);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 10px;
+            text-transform: uppercase;
+        }
+        button:active {
+            filter: brightness(0.9);
+        }
+        .results-panel {
+            margin-top: 25px;
+            padding: 15px;
+            background-color: #252525;
+            border-radius: 6px;
+            border-left: 4px solid var(--primary);
+        }
+        .results-title {
+            font-weight: bold;
+            color: var(--primary);
+            margin-bottom: 10px;
+            font-size: 0.95rem;
+        }
+        .result-item {
+            font-size: 0.95rem;
+            margin-bottom: 8px;
+            line-height: 1.4;
+        }
+        .error-text {
+            color: var(--danger);
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Substitutor & Dimensionador Pro</h1>
+    <label class="section-title">1. Fios Originais do Motor</label>
+    <span class="subtitle">Exemplo: 15x20 ou 4x18 + 2x20</span>
+    <input type="text" id="entry_orig" placeholder="Digite aqui...">
+    <label class="section-title">2. De / Para (Materiais):</label>
+    <div class="row">
+        <select id="spin_de">
+            <option value="Alumínio" selected>Alumínio</option>
+            <option value="Cobre">Cobre</option>
+        </select>
+        <select id="spin_para">
+            <option value="Cobre" selected>Cobre</option>
+            <option value="Alumínio">Alumínio</option>
+        </select>
+    </div>
+    <label class="section-title">Tipo de Ligação Elétrica:</label>
+    <select id="spin_ligacao">
+        <option value="Série (Circuito Único)">Série (Circuito Único)</option>
+        <option value="Paralelo (2 Circuitos)">Paralelo (2 Circuitos)</option>
+        <option value="Paralelo (4 Circuitos)">Paralelo (4 Circuitos)</option>
+    </select>
+    <label class="section-title">3. Fios Novos de Substituição</label>
+    <span class="subtitle">Exemplo: 15x22 ou 10x21</span>
+    <input type="text" id="entry_sub" placeholder="Digite aqui...">
+    <button onclick="calcular()">Calcular Rebobinagem</button>
+    <div class="results-panel">
+        <div class="results-title">RESULTADOS TÉCNICOS</div>
+        <div id="painel_resultado">
+            <div class="result-item" style="color: var(--text-secondary);">Preencha os campos acima para simular.</div>
+        </div>
+    </div>
+</div>
+<script>
+    const TABELA_AWG = {
+        10: 5.26, 11: 4.17, 12: 3.31, 13: 2.62, 14: 2.08,
+        15: 1.65, 16: 1.31, 17: 1.04, 18: 0.823, 19: 0.653,
+        20: 0.519, 21: 0.411, 22: 0.326, 23: 0.259, 24: 0.205,
+        25: 0.162, 26: 0.129, 27: 0.102, 28: 0.080, 29: 0.064,
+        30: 0.051
+    };
+    function interpretarFios(texto) {
+        texto = texto.toLowerCase().replace(/\s+/g, '').replace(/,/g, '.');
+        if (!texto) return { area: 0, qtd: 0, erro: true };
+        let partes = texto.split("+");
+        let areaTotal = 0.0;
+        let totalFios = 0;
+        for (let parte of partes) {
+            if (!parte) continue;
+            let padrao = [];
+            if (parte.includes("x")) { padrao = parte.split("x"); }
+            else if (parte.includes("*")) { padrao = parte.split("*"); }
+            else { padrao = ["1", parte]; }
+            try {
+                let qtd = parseInt(padrao[0], 10);
+                let awg = parseInt(padrao[1], 10);
+                if (TABELA_AWG[awg] !== undefined) {
+                    areaTotal += (TABELA_AWG[awg] * qtd);
+                    totalFios += qtd;
+                } else { return { area: 0, qtd: 0, erro: true }; }
+            } catch (e) { return { area: 0, qtd: 0, erro: true }; }
+        }
+        return { area: areaTotal, qtd: totalFios, erro: false };
+    }
+    function calcular() {
+        const txtOrig = document.getElementById("entry_orig").value;
+        const txtSub = document.getElementById("entry_sub").value;
+        const painel = document.getElementById("painel_resultado");
+        const orig = interpretarFios(txtOrig);
+        const sub = interpretarFios(txtSub);
+        if (orig.erro || orig.area === 0 || sub.erro || sub.area === 0) {
+            painel.innerHTML = `<div class="error-text">Erro: Verifique o formato dos fios digitados.</div>`;
+            return;
+        }
+        const de = document.getElementById("spin_de").value;
+        const para = document.getElementById("spin_para").value;
+        let fator = 1.0;
+        if (de === "Cobre" && para === "Alumínio") fator = 1.6;
+        else if (de === "Alumínio" && para === "Cobre") fator = 1.0 / 1.6;
+        let areaNecessariaTotal = orig.area * fator;
+        const tipoLigacao = document.getElementById("spin_ligacao").value;
+        if (tipoLigacao === "Paralelo (2 Circuitos)") areaNecessariaTotal /= 2;
+        else if (tipoLigacao === "Paralelo (4 Circuitos)") areaNecessariaTotal /= 4;
+        let diferenca = ((sub.area - areaNecessariaTotal) / areaNecessariaTotal) * 100;
+        let densidade = (para === "Cobre") ? 5.0 : 3.1;
+        let areaRealMotor = sub.area;
+        if (tipoLigacao === "Paralelo (2 Circuitos)") areaRealMotor *= 2;
+        else if (tipoLigacao === "Paralelo (4 Circuitos)") areaRealMotor *= 4;
+        let correnteEstimada = areaRealMotor * densidade;
+        let cabo = "";
+        if (correnteEstimada <= 15.5) cabo = "1.5 mm²";
+        else if (correnteEstimada <= 21) cabo = "2.5 mm²";
+        else if (correnteEstimada <= 28) cabo = "4.0 mm²";
+        else if (correnteEstimada <= 36) cabo = "6.0 mm²";
+        else if (correnteEstimada <= 50) cabo = "10.0 mm²";
+        else cabo = "16.0 mm² ou maior";
+        let corErro = "var(--danger)";
+        if (diferenca >= -5.0 && diferenca <= 5.0) { corErro = "var(--success)"; }
+        else if (diferenca > 5.0) { corErro = "var(--warning)"; }
+        let sinal = diferenca >= 0 ? "+" : "";
+        painel.innerHTML = `
+            <div class="result-item">• Seção Original: <b>${orig.area.toFixed(3)} mm²</b> (${orig.qtd} fios)</div>
+            <div class="result-item">• Seção p/ Grupo Requerida: <b>${areaNecessariaTotal.toFixed(3)} mm²</b></div>
+            <div class="result-item">• Seção Nova Proposta: <b>${sub.area.toFixed(3)} mm²</b> (${sub.qtd} fios)</div>
+            <div class="result-item">• Erro de Escala: <span style="color: ${corErro}; font-weight: bold;">${sinal}${diferenca.toFixed(2)}%</span></div>
+            <div class="result-item">• Corrente Máx: <b>${correnteEstimada.toFixed(1)} A</b></div>
+            <div class="result-item">• Cabo Externo Comercial: <span style="color: var(--primary); font-weight: bold;">${cabo}</span></div>
+        `;
+    }
+</script>
+</body>
+</html>
